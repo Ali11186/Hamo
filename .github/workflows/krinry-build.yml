@@ -1,0 +1,91 @@
+name: krinry Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'release'
+        type: choice
+        options: [debug, profile, release]
+      output_type:
+        description: 'Output type'
+        required: true
+        default: 'apk'
+        type: choice
+        options: [apk, appbundle, apk-split]
+      target_platform:
+        description: 'Target platform (APK only)'
+        required: false
+        default: 'all'
+        type: choice
+        options: [all, android-arm64, android-arm, android-x64]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.0'
+          channel: stable
+          cache: true
+      - name: Flutter version
+        run: flutter --version
+      - name: Get dependencies
+        run: flutter pub get
+      - name: Generate Android platform files
+        run: flutter create --platforms android .
+      - name: Build
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -e
+          BUILD_TYPE="${{ github.event.inputs.build_type }}"
+          OUTPUT_TYPE="${{ github.event.inputs.output_type }}"
+          TARGET_PLATFORM="${{ github.event.inputs.target_platform }}"
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "Missing GEMINI_API_KEY repository secret."
+            echo "Add it in Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          DART_DEFINE="--dart-define=GEMINI_API_KEY=$GEMINI_API_KEY"
+          if [ "$OUTPUT_TYPE" = "apk" ]; then
+            if [ "$TARGET_PLATFORM" != "all" ]; then
+              flutter build apk --$BUILD_TYPE --target-platform "$TARGET_PLATFORM" "$DART_DEFINE"
+            else
+              flutter build apk --$BUILD_TYPE "$DART_DEFINE"
+            fi
+          elif [ "$OUTPUT_TYPE" = "apk-split" ]; then
+            flutter build apk --$BUILD_TYPE --split-per-abi "$DART_DEFINE"
+          elif [ "$OUTPUT_TYPE" = "appbundle" ]; then
+            flutter build appbundle --$BUILD_TYPE "$DART_DEFINE"
+          else
+            echo "Unsupported output type: $OUTPUT_TYPE"
+            exit 1
+          fi
+      - name: Upload APK
+        if: ${{ github.event.inputs.output_type == 'apk' || github.event.inputs.output_type == 'apk-split' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Hamo-${{ github.event.inputs.build_type }}-${{ github.event.inputs.output_type }}
+          path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload App Bundle
+        if: ${{ github.event.inputs.output_type == 'appbundle' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Hamo-${{ github.event.inputs.build_type }}-appbundle
+          path: build/app/outputs/bundle/*/*.aab
+          if-no-files-found: error
+          retention-days: 7

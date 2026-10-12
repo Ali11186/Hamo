@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide AuthException;
 
 import '../../../core/constants/app_constants.dart';
@@ -38,14 +39,17 @@ class ChatRemoteDataSourceImpl implements ChatRemoteDataSource {
   final SupabaseClient _supabase;
   final CloudinaryUploadService _cloudinary;
   final FirebaseAuth _auth;
+  final FirebaseFirestore _firestore;
 
   ChatRemoteDataSourceImpl(
       {required SupabaseClient supabase,
       required CloudinaryUploadService cloudinary,
-      required FirebaseAuth auth})
+      required FirebaseAuth auth,
+      required FirebaseFirestore firestore})
       : _supabase = supabase,
         _cloudinary = cloudinary,
-        _auth = auth;
+        _auth = auth,
+        _firestore = firestore;
 
   Map<String, dynamic> _map(dynamic value) =>
       Map<String, dynamic>.from(value as Map);
@@ -55,12 +59,29 @@ class ChatRemoteDataSourceImpl implements ChatRemoteDataSource {
     return '${ids[0]}_${ids[1]}';
   }
 
-  ChatModel _chatFromRow(Map<String, dynamic> row) {
+  Future<ChatModel> _chatFromRow(Map<String, dynamic> row) async {
     final customerId = row['customer_id'] as String? ?? '';
     final adminId = row['admin_id'] as String? ?? '';
+    var customerName = 'العميل';
+
+    if (customerId.isNotEmpty) {
+      try {
+        final doc = await _firestore
+            .collection(AppConstants.usersCollection)
+            .doc(customerId)
+            .get();
+        final name = doc.data()?['fullName'] as String?;
+        if (name != null && name.trim().isNotEmpty) {
+          customerName = name.trim();
+        }
+      } catch (_) {
+        // Use the fallback if the profile cannot be loaded.
+      }
+    }
+
     return ChatModel.fromMap({
       'participantIds': [customerId, adminId],
-      'participantNames': {customerId: 'العميل', adminId: 'الإدارة'},
+      'participantNames': {customerId: customerName, adminId: '𝐇𝐚𝐦𝐨'},
       'participantAvatars': {customerId: null, adminId: null},
       'lastMessage': row['last_message'],
       'lastMessageType': row['last_message_type'],
@@ -106,7 +127,7 @@ class ChatRemoteDataSourceImpl implements ChatRemoteDataSource {
           .eq('customer_id', buyerId)
           .eq('admin_id', sellerId)
           .maybeSingle();
-      if (existing != null) return _chatFromRow(_map(existing));
+      if (existing != null) return await _chatFromRow(_map(existing));
       final inserted = await _supabase
           .from('conversations')
           .insert({
@@ -117,7 +138,7 @@ class ChatRemoteDataSourceImpl implements ChatRemoteDataSource {
           })
           .select()
           .single();
-      return _chatFromRow(_map(inserted));
+      return await _chatFromRow(_map(inserted));
     } on PostgrestException catch (e) {
       throw ServerException(message: e.message, code: e.code);
     }
@@ -131,7 +152,7 @@ class ChatRemoteDataSourceImpl implements ChatRemoteDataSource {
           .select()
           .eq('id', chatId)
           .single();
-      return _chatFromRow(_map(row));
+      return await _chatFromRow(_map(row));
     } on PostgrestException catch (e) {
       throw ServerException(message: e.message, code: e.code);
     }
@@ -145,7 +166,7 @@ class ChatRemoteDataSourceImpl implements ChatRemoteDataSource {
           .select()
           .or('customer_id.eq.$userId,admin_id.eq.$userId')
           .order('updated_at', ascending: false);
-      return (rows as List).map((row) => _chatFromRow(_map(row))).toList();
+      return Future.wait((rows as List).map((row) => _chatFromRow(_map(row))));
     } on PostgrestException catch (e) {
       throw ServerException(message: e.message, code: e.code);
     }

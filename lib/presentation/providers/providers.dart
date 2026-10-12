@@ -83,6 +83,7 @@ final chatRemoteDataSourceProvider = Provider<ChatRemoteDataSource>((ref) {
     supabase: ref.watch(supabaseProvider),
     cloudinary: ref.watch(cloudinaryUploadProvider),
     auth: ref.watch(firebaseAuthProvider),
+    firestore: ref.watch(firestoreProvider),
   );
 });
 

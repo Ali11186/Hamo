@@ -521,19 +521,56 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
               child: AppButton(
                 onPressed: () async {
                   final currentUser = ref.read(currentUserProvider);
-                  if (currentUser == null) return;
-                  final chat = await ref
-                      .read(chatNotifierProvider.notifier)
-                      .getOrCreateChat(
-                        sellerId: AppConstants.adminUid,
-                        productTitle: product.title,
-                        productImageUrl: product.mainThumbnailUrl,
+
+                  if (currentUser == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('سجّل الدخول أولًا للتواصل مع الأدمن'),
+                      ),
+                    );
+                    return;
+                  }
+
+                  try {
+                    final chat = await ref
+                        .read(chatNotifierProvider.notifier)
+                        .getOrCreateChat(
+                          sellerId: AppConstants.adminUid,
+                          productTitle: product.title,
+                          productImageUrl: product.mainThumbnailUrl,
+                        );
+
+                    if (!context.mounted) return;
+
+                    if (chat != null) {
+                      context.push(
+                        '/chat/${chat.id}',
+                        extra: {
+                          'otherUserName': '𝐇𝐚𝐦𝐨',
+                          'otherUserAvatar': null,
+                        },
                       );
-                  if (chat != null && context.mounted) {
-                    context.push('/chat/${chat.id}', extra: {
-                      'otherUserName': '𝐇𝐚𝐦𝐨',
-                      'otherUserAvatar': null,
-                    });
+                    } else {
+                      final chatState = ref.read(chatNotifierProvider);
+                      final errorMessage = chatState.hasError
+                          ? chatState.error.toString()
+                          : 'تعذر إنشاء المحادثة. حاول مرة أخرى.';
+
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('فشل فتح الشات: $errorMessage'),
+                          duration: const Duration(seconds: 6),
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('خطأ أثناء فتح الشات: $e'),
+                        duration: const Duration(seconds: 6),
+                      ),
+                    );
                   }
                 },
                 label: 'تواصل مع الأدمن',

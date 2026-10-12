@@ -60,8 +60,8 @@ class ChatRemoteDataSourceImpl implements ChatRemoteDataSource {
   }
 
   Future<ChatModel> _chatFromRow(Map<String, dynamic> row) async {
-    final customerId = row['customer_id'] as String? ?? '';
-    final adminId = row['admin_id'] as String? ?? '';
+    final customerId = row['customer_id']?.toString() ?? '';
+    final adminId = row['admin_id']?.toString() ?? '';
     var customerName = 'العميل';
 
     if (customerId.isNotEmpty) {
@@ -70,18 +70,38 @@ class ChatRemoteDataSourceImpl implements ChatRemoteDataSource {
             .collection(AppConstants.usersCollection)
             .doc(customerId)
             .get();
-        final name = doc.data()?['fullName'] as String?;
-        if (name != null && name.trim().isNotEmpty) {
-          customerName = name.trim();
+
+        final data = doc.data();
+        final storedName = data?['fullName']?.toString().trim() ?? '';
+
+        if (storedName.isNotEmpty) {
+          customerName = storedName;
+        } else {
+          print(
+            '[CHAT_NAME] fullName is missing for customerId=$customerId; '
+            'documentExists=${doc.exists}',
+          );
+          if (_auth.currentUser?.uid == customerId) {
+            final authName = _auth.currentUser?.displayName?.trim() ?? '';
+            if (authName.isNotEmpty) customerName = authName;
+          }
         }
-      } catch (_) {
-        // Use the fallback if the profile cannot be loaded.
+      } catch (e, stack) {
+        print('[CHAT_NAME] Failed to load customer profile: $e');
+        print(stack);
+        if (_auth.currentUser?.uid == customerId) {
+          final authName = _auth.currentUser?.displayName?.trim() ?? '';
+          if (authName.isNotEmpty) customerName = authName;
+        }
       }
     }
 
     return ChatModel.fromMap({
       'participantIds': [customerId, adminId],
-      'participantNames': {customerId: customerName, adminId: '𝐇𝐚𝐦𝐨'},
+      'participantNames': {
+        customerId: customerName,
+        adminId: '𝐇𝐚𝐦𝐨',
+      },
       'participantAvatars': {customerId: null, adminId: null},
       'lastMessage': row['last_message'],
       'lastMessageType': row['last_message_type'],
@@ -114,30 +134,68 @@ class ChatRemoteDataSourceImpl implements ChatRemoteDataSource {
   }
 
   @override
-  Future<ChatModel> getOrCreateChat(
-      {required String buyerId,
-      required String sellerId,
-      String? productId,
-      String? productTitle,
-      String? productImageUrl}) async {
+  Future<ChatModel> getOrCreateChat({
+    required String buyerId,
+    required String sellerId,
+    String? productId,
+    String? productTitle,
+    String? productImageUrl,
+  }) async {
     try {
+      var customerName = '';
+
+      try {
+        final doc = await _firestore
+            .collection(AppConstants.usersCollection)
+            .doc(buyerId)
+            .get();
+
+        customerName = doc.data()?['fullName']?.toString().trim() ?? '';
+      } catch (e) {
+        print('[CHAT_NAME] Failed to load customer name: $e');
+      }
+
+      if (customerName.isEmpty && _auth.currentUser?.uid == buyerId) {
+        customerName = _auth.currentUser?.displayName?.trim() ?? '';
+      }
+
       final existing = await _supabase
           .from('conversations')
           .select()
           .eq('customer_id', buyerId)
           .eq('admin_id', sellerId)
           .maybeSingle();
-      if (existing != null) return await _chatFromRow(_map(existing));
+
+      if (existing != null) {
+        final row = _map(existing);
+        final savedName = row['customer_name']?.toString().trim() ?? '';
+
+        if (savedName.isEmpty && customerName.isNotEmpty) {
+          try {
+            await _supabase
+                .from('conversations')
+                .update({'customer_name': customerName}).eq('id', row['id']);
+            row['customer_name'] = customerName;
+          } catch (e) {
+            print('[CHAT_NAME] Could not update existing conversation: $e');
+          }
+        }
+
+        return await _chatFromRow(row);
+      }
+
       final inserted = await _supabase
           .from('conversations')
           .insert({
             'customer_id': buyerId,
             'admin_id': sellerId,
+            'customer_name': customerName.isEmpty ? 'العميل' : customerName,
             'product_id': productId,
             'product_title': productTitle,
           })
           .select()
           .single();
+
       return await _chatFromRow(_map(inserted));
     } on PostgrestException catch (e) {
       throw ServerException(message: e.message, code: e.code);
@@ -322,7 +380,12 @@ class ChatRemoteDataSourceImpl implements ChatRemoteDataSource {
   }
 
   @override
-  Stream<int> watchTotalUnreadCount(String userId) =>
-      watchUserChats(userId).map((chats) =>
-          chats.fold(0, (sum, chat) => sum + chat.getUnreadCount(userId)));
+  Stream<int> watchTotalUnreadCount(String userId) {
+    return watchUserChats(userId).map(
+      (chats) => chats.fold<int>(
+        0,
+        (total, chat) => total + chat.getUnreadCount(userId),
+      ),
+    );
+  }
 }
